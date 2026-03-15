@@ -3,17 +3,19 @@ const cors = require('cors');
 const sql = require('mssql');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken'); // Ye add kiya kyunki niche verifyToken me chahiye
 
 const app = express();
 app.use(cors({
-    origin: '*', // Sabhi devices ko allow karega
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
 }));
 app.use(express.json());
 
 const API_KEY = 'NSS_Roshan_2026_SecureKey';
-const otps = {}; // Temporary storage for OTPs
+const JWT_SECRET = 'NSS_Secret_Key_9988'; // Token verify karne ke liye zaroori hai
+const otps = {}; 
 
 // --- 1. DATABASE CONFIGURATION ---
 const dbConfig = {
@@ -27,7 +29,6 @@ const dbConfig = {
     }
 };
 
-// Database Connection Pool
 const poolPromise = new sql.ConnectionPool(dbConfig).connect()
     .then(pool => {
         console.log('✅ Connected to RDS (MSSQL) Successfully!');
@@ -35,7 +36,21 @@ const poolPromise = new sql.ConnectionPool(dbConfig).connect()
     })
     .catch(err => console.log('❌ DB Connection Failed:', err.message));
 
-// --- 2. EMAIL SETUP ---
+// --- 2. AUTH MIDDLEWARE (Jo tumhare code me missing tha) ---
+function verifyToken(req, res, next) {
+    const token = req.headers['authorization'];
+    if (!token) return res.status(403).send("Token required");
+    try {
+        const bearer = token.split(" ")[1];
+        const decoded = jwt.verify(bearer, JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (err) {
+        return res.status(401).send("Invalid Token");
+    }
+}
+
+// --- 3. EMAIL SETUP ---
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -46,7 +61,7 @@ const transporter = nodemailer.createTransport({
 
 app.get('/', (req, res) => res.send('NSS Master API is LIVE!'));
 
-// --- 3. SEND OTP ROUTE ---
+// --- 4. SEND OTP ROUTE ---
 app.post('/api/auth/send-otp', async (req, res) => {
     if (req.headers['x-api-key'] !== API_KEY) return res.status(401).send("Unauthorized");
 
@@ -67,7 +82,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
             from: '"NSS Ratnam" <nesratnam.nssmanagementsystem@gmail.com>',
             to: normalizedEmail,
             subject: 'Registration OTP - NSS Ratnam',
-            html: `<h3>Welcome to NSS!</h3><p>Your verification code is: <b style="font-size: 20px;">${otp}</b></p>`
+            html: `<h3>Welcome to NSS!</h3><p>Your verification code is: <b>${otp}</b></p>`
         });
         res.json({ status: "success", message: "OTP Sent!" });
     } catch (err) {
@@ -75,7 +90,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
     }
 });
 
-// --- 4. VERIFY OTP & REGISTER ---
+// --- 5. VERIFY OTP & REGISTER ---
 app.post('/api/auth/verify-and-register', async (req, res) => {
     const { email, userOtp } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
@@ -102,7 +117,6 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         const groupId = groupRes.recordset[0].GroupID;
         let role = 'Member';
 
-        // Leader Code Verification
         if (leaderCode && leaderCode.trim() !== "") {
             const lCheck = await pool.request()
                 .input('Code', leaderCode)
@@ -116,75 +130,65 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
                     .query(`UPDATE LeaderConfig SET UsageCount += 1 WHERE LeaderCodeID = @ID`);
             }
         }
-        let userRole = 'Member'; // Default
-            if (leaderCode) {
-            // Yahan SQL query chalao LeaderCodes table check karne ke liye
-            // Agar sahi nikla toh:
-        userRole = 'Leader';
-}
-// Phir INSERT query mein @R ki jagah userRole variable bhej do
-        // --- Registration Query ka Corrected Part ---
-const hash = await bcrypt.hash(password, 10);
 
-await pool.request()
-    .input('N', fullName)
-    .input('E', email)
-    .input('P', phone)
-    .input('D', dob)
-    .input('G', gender)
-    .input('B', bloodGroup)
-    .input('R', role)      // 'Member' ya 'Leader' yahan se jayega
-    .input('GID', groupId) // GroupID yahan se jayega
-    .input('Pass', hash)
-    .input('C', caste)
-    .input('Course', course)
-    // Purana: INSERT INTO AppUsers (FullName, Email, Course, Department, ...)
-// Naya: 
-const query = `INSERT INTO AppUsers (FullName, Email, Course, Batch, Year, Password, UserRole) 
-               VALUES (@name, @email, @course, @batch, @year, @pass, @role)`;
+        const hash = await bcrypt.hash(password, 10);
 
-delete otps[normalizedEmail];
-res.json({ status: "success", message: "Registered successfully as " + role });
+        // --- FIXED INSERT QUERY ---
+        await pool.request()
+            .input('N', fullName)
+            .input('E', normalizedEmail)
+            .input('P', phone)
+            .input('D', dob)
+            .input('G', gender)
+            .input('B', bloodGroup)
+            .input('R', role)
+            .input('GID', groupId)
+            .input('Pass', hash)
+            .input('C', caste)
+            .input('Dept', department)
+            .input('Course', course)
+            .query(`INSERT INTO AppUsers (FullName, Email, Phone, DOB, Gender, BloodGroup, UserRole, GroupID, Password, Caste, Department, Course) 
+                    VALUES (@N, @E, @P, @D, @G, @B, @R, @GID, @Pass, @C, @Dept, @Course)`);
+
+        delete otps[normalizedEmail];
+        res.json({ status: "success", message: "Registered successfully as " + role });
 
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Route: Get students for the logged-in Leader
+// --- 6. LEADER'S STUDENT LIST ---
 app.get('/api/leader/students', verifyToken, async (req, res) => {
     try {
-        const leaderId = req.user.id; // Token se leader ki ID nikalna
-
-        const query = `
-            SELECT S.UserID, S.FullName, S.Email, S.Course, S.Batch, S.Year 
-            FROM dbo.AppUsers S
-            JOIN dbo.AppUsers L ON S.Course = L.Course 
-                AND S.Batch = L.Batch 
-                AND S.Year = L.Year
-            WHERE L.UserID = @leaderId 
-              AND S.UserRole = 'Member'
-              AND S.UserID != @leaderId;
-        `;
-
-        const request = new sql.Request();
-        request.input('leaderId', sql.Int, leaderId);
-        
-        const result = await request.query(query);
+        const leaderId = req.user.id; 
+        const pool = await poolPromise;
+        const result = await pool.request()
+            .input('leaderId', sql.Int, leaderId)
+            .query(`
+                SELECT S.UserID, S.FullName, S.Email, S.Course, S.Batch, S.Year 
+                FROM dbo.AppUsers S
+                JOIN dbo.AppUsers L ON S.Course = L.Course 
+                    AND S.Batch = L.Batch 
+                    AND S.Year = L.Year
+                WHERE L.UserID = @leaderId 
+                  AND S.UserRole = 'Member'
+                  AND S.UserID != @leaderId;
+            `);
         res.json(result.recordset);
     } catch (err) {
         res.status(500).send("Server Error: " + err.message);
     }
 });
 
-// --- 5. UNIVERSAL LOGIN ---
+// --- 7. UNIVERSAL LOGIN ---
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Admin Hardcoded Login
     if (normalizedEmail === 'sharwarinarvekar812@gmail.com' && password === 'Shar@123') {
-        return res.json({ status: "success", user: { id: 0, name: "Sharwari Narvekar", role: "Officer", groupId: null } });
+        const token = jwt.sign({ id: 0, role: 'Officer' }, JWT_SECRET);
+        return res.json({ status: "success", token, user: { id: 0, name: "Sharwari Narvekar", role: "Officer" } });
     }
 
     try {
@@ -202,8 +206,11 @@ app.post('/api/auth/login', async (req, res) => {
         
         if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
 
+        const token = jwt.sign({ id: user.UserID, role: user.UserRole }, JWT_SECRET);
+
         res.json({
             status: "success",
+            token,
             user: {
                 id: user.UserID,
                 name: user.FullName,
@@ -218,45 +225,37 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// Atttendance Marking Route For Leaders
+// --- 8. ATTENDANCE MARKING ---
 app.post('/api/attendance/mark', verifyToken, async (req, res) => {
     try {
-        const { studentId, status } = req.body; // Status: 'Present' or 'Absent'
-        const leaderId = req.user.id; // Logged-in Leader ki ID token se
+        const { studentId, status } = req.body; 
+        const leaderId = req.user.id; 
 
-        const request = new sql.Request();
-        request.input('leaderId', sql.Int, leaderId);
-        request.input('studentId', sql.Int, studentId);
-        request.input('status', sql.NVarChar, status);
+        const pool = await poolPromise;
+        const result = await pool.request()
+            .input('leaderId', sql.Int, leaderId)
+            .input('studentId', sql.Int, studentId)
+            .input('status', sql.NVarChar, status)
+            .query(`
+                IF EXISTS (
+                    SELECT 1 FROM dbo.AppUsers L, dbo.AppUsers S
+                    WHERE L.UserID = @leaderId AND S.UserID = @studentId
+                      AND L.Course = S.Course AND L.Batch = S.Batch AND L.Year = S.Year
+                      AND L.UserRole = 'Leader'
+                )
+                BEGIN
+                    INSERT INTO dbo.Attendance (StudentID, Status, MarkedBy, AttendanceDate)
+                    VALUES (@studentId, @status, @leaderId, CAST(GETDATE() AS DATE));
+                    SELECT 'SUCCESS' AS Result, 'Attendance marked successfully!' AS Message;
+                END
+                ELSE
+                BEGIN
+                    SELECT 'ERROR' AS Result, 'Unauthorized: Class mismatch or you are not a Leader!' AS Message;
+                END
+            `);
 
-        // Validation + Insertion logic
-        const query = `
-            IF EXISTS (
-                SELECT 1 FROM dbo.AppUsers L, dbo.AppUsers S
-                WHERE L.UserID = @leaderId AND S.UserID = @studentId
-                  AND L.Course = S.Course AND L.Batch = S.Batch AND L.Year = S.Year
-                  AND L.UserRole = 'Leader'
-            )
-            BEGIN
-                INSERT INTO dbo.Attendance (StudentID, Status, MarkedBy, AttendanceDate)
-                VALUES (@studentId, @status, @leaderId, CAST(GETDATE() AS DATE));
-                
-                SELECT 'SUCCESS' AS Result, 'Attendance marked successfully!' AS Message;
-            END
-            ELSE
-            BEGIN
-                SELECT 'ERROR' AS Result, 'Unauthorized: Class mismatch or you are not a Leader!' AS Message;
-            END
-        `;
-
-        const result = await request.query(query);
         const response = result.recordset[0];
-
-        if (response.Result === 'SUCCESS') {
-            res.status(200).json(response);
-        } else {
-            res.status(403).json(response);
-        }
+        res.status(response.Result === 'SUCCESS' ? 200 : 403).json(response);
 
     } catch (err) {
         res.status(500).json({ Result: 'ERROR', Message: err.message });
@@ -265,5 +264,5 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on port ${PORT}`);
+    console.log(`🚀 Master API Server running on port ${PORT}`);
 });
