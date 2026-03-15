@@ -133,12 +133,11 @@ await pool.request()
     .input('GID', groupId) // GroupID yahan se jayega
     .input('Pass', hash)
     .input('C', caste)
-    .input('Dept', department)
     .input('Course', course)
-    .query(`INSERT INTO dbo.AppUsers 
-            (FullName, Email, Contact, DOB, Gender, BloodGroup, UserRole, GroupID, Password, UserStatus, Caste, Department, Course) 
-            VALUES 
-            (@N, @E, @P, @D, @G, @B, @R, @GID, @Pass, 'Active', @C, @Dept, @Course)`);
+    // Purana: INSERT INTO AppUsers (FullName, Email, Course, Department, ...)
+// Naya: 
+const query = `INSERT INTO AppUsers (FullName, Email, Course, Batch, Year, Password, UserRole) 
+               VALUES (@name, @email, @course, @batch, @year, @pass, @role)`;
 
 delete otps[normalizedEmail];
 res.json({ status: "success", message: "Registered successfully as " + role });
