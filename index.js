@@ -112,7 +112,13 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
                     .query(`UPDATE LeaderConfig SET UsageCount += 1 WHERE LeaderCodeID = @ID`);
             }
         }
-
+        let userRole = 'Member'; // Default
+            if (leaderCode) {
+            // Yahan SQL query chalao LeaderCodes table check karne ke liye
+            // Agar sahi nikla toh:
+        userRole = 'Leader';
+}
+// Phir INSERT query mein @R ki jagah userRole variable bhej do
         // --- Registration Query ka Corrected Part ---
 const hash = await bcrypt.hash(password, 10);
 
