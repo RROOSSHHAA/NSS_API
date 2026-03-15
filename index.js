@@ -147,6 +147,32 @@ res.json({ status: "success", message: "Registered successfully as " + role });
     }
 });
 
+// Route: Get students for the logged-in Leader
+app.get('/api/leader/students', verifyToken, async (req, res) => {
+    try {
+        const leaderId = req.user.id; // Token se leader ki ID nikalna
+
+        const query = `
+            SELECT S.UserID, S.FullName, S.Email, S.Course, S.Batch, S.Year 
+            FROM dbo.AppUsers S
+            JOIN dbo.AppUsers L ON S.Course = L.Course 
+                AND S.Batch = L.Batch 
+                AND S.Year = L.Year
+            WHERE L.UserID = @leaderId 
+              AND S.UserRole = 'Member'
+              AND S.UserID != @leaderId;
+        `;
+
+        const request = new sql.Request();
+        request.input('leaderId', sql.Int, leaderId);
+        
+        const result = await request.query(query);
+        res.json(result.recordset);
+    } catch (err) {
+        res.status(500).send("Server Error: " + err.message);
+    }
+});
+
 // --- 5. UNIVERSAL LOGIN ---
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
