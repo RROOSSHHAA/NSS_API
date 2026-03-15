@@ -214,6 +214,51 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+// Atttendance Marking Route For Leaders
+app.post('/api/attendance/mark', verifyToken, async (req, res) => {
+    try {
+        const { studentId, status } = req.body; // Status: 'Present' or 'Absent'
+        const leaderId = req.user.id; // Logged-in Leader ki ID token se
+
+        const request = new sql.Request();
+        request.input('leaderId', sql.Int, leaderId);
+        request.input('studentId', sql.Int, studentId);
+        request.input('status', sql.NVarChar, status);
+
+        // Validation + Insertion logic
+        const query = `
+            IF EXISTS (
+                SELECT 1 FROM dbo.AppUsers L, dbo.AppUsers S
+                WHERE L.UserID = @leaderId AND S.UserID = @studentId
+                  AND L.Course = S.Course AND L.Batch = S.Batch AND L.Year = S.Year
+                  AND L.UserRole = 'Leader'
+            )
+            BEGIN
+                INSERT INTO dbo.Attendance (StudentID, Status, MarkedBy, AttendanceDate)
+                VALUES (@studentId, @status, @leaderId, CAST(GETDATE() AS DATE));
+                
+                SELECT 'SUCCESS' AS Result, 'Attendance marked successfully!' AS Message;
+            END
+            ELSE
+            BEGIN
+                SELECT 'ERROR' AS Result, 'Unauthorized: Class mismatch or you are not a Leader!' AS Message;
+            END
+        `;
+
+        const result = await request.query(query);
+        const response = result.recordset[0];
+
+        if (response.Result === 'SUCCESS') {
+            res.status(200).json(response);
+        } else {
+            res.status(403).json(response);
+        }
+
+    } catch (err) {
+        res.status(500).json({ Result: 'ERROR', Message: err.message });
+    }
+});
+
 // Port configuration for Render
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Master API Server running on port ${PORT}`));
