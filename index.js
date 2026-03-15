@@ -109,9 +109,6 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
 
         const hash = await bcrypt.hash(password, 10);
         await pool.request()
-            .input('N', fullName).input('E', normalizedEmail).input('P', phone).input('D', dob).input('G', gender)
-            .input('B', bloodGroup).input('R', role).input('GID', groupId).input('Pass', hash)
-            .input('C', caste).input('Dept', department).input('Course', course)
             .input('N', fullName)
             .input('E', email)
             .input('P', contact) // Tumne query mein 3rd column 'Contact' rakha hai, toh yahan phone aana chahiye
