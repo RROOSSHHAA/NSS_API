@@ -85,11 +85,12 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         const pool = await poolPromise;
         const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = record.data;
 
+        // Is query ko aise update karo:
         const groupRes = await pool.request()
-            .input('BN', batch).input('YN', year)
-            .query(`SELECT g.GroupID FROM dbo.Groups g 
-                    JOIN Batches b ON g.BatchID = b.BatchID 
-                    WHERE b.BatchName = @BN AND g.YearName = @YN`);
+        .input('BN', batch).input('YN', year)
+        .query(`SELECT g.GroupID FROM [Group] g 
+            JOIN Batch b ON g.BatchID = b.BatchID 
+            WHERE b.BatchName = @BN AND g.YearName = @YN`);
 
         if (groupRes.recordset.length === 0) return res.status(400).json({ message: "Selected Batch/Year not found." });
         
