@@ -87,7 +87,7 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
 
         const groupRes = await pool.request()
             .input('BN', batch).input('YN', year)
-            .query(`SELECT g.GroupID FROM Groups g 
+            .query(`SELECT g.GroupID FROM dbo.Groups g 
                     JOIN Batches b ON g.BatchID = b.BatchID 
                     WHERE b.BatchName = @BN AND g.YearName = @YN`);
 
