@@ -113,29 +113,29 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
             }
         }
 
-        const hash = await bcrypt.hash(password, 10);
+        // --- Registration Query ka Corrected Part ---
+const hash = await bcrypt.hash(password, 10);
 
-        // Final Registration
-        await pool.request()
-            .input('N', fullName)
-            .input('E', email)
-            .input('P', phone)
-            .input('D', dob)
-            .input('G', gender)
-            .input('B', bloodGroup)
-            .input('R', role)
-            .input('GID', groupId)
-            .input('Pass', hash)
-            .input('C', caste)
-            .input('Dept', department)
-            .input('Course', course)
-            .query(`INSERT INTO dbo.AppUsers 
-                    (FullName, Email, Contact, DOB, Gender, BloodGroup, UserRole, GroupID, Password, UserStatus, Caste, Department, Course) 
-                    VALUES 
-                    (@N, @E, @P, @D, @G, @B, @R, @GID, @Pass, 'Active', @C, @Dept, @Course)`);
+await pool.request()
+    .input('N', fullName)
+    .input('E', email)
+    .input('P', phone)
+    .input('D', dob)
+    .input('G', gender)
+    .input('B', bloodGroup)
+    .input('R', role)      // 'Member' ya 'Leader' yahan se jayega
+    .input('GID', groupId) // GroupID yahan se jayega
+    .input('Pass', hash)
+    .input('C', caste)
+    .input('Dept', department)
+    .input('Course', course)
+    .query(`INSERT INTO dbo.AppUsers 
+            (FullName, Email, Contact, DOB, Gender, BloodGroup, UserRole, GroupID, Password, UserStatus, Caste, Department, Course) 
+            VALUES 
+            (@N, @E, @P, @D, @G, @B, @R, @GID, @Pass, 'Active', @C, @Dept, @Course)`);
 
-        delete otps[normalizedEmail];
-        res.json({ status: "success", message: "Registered successfully as " + role });
+delete otps[normalizedEmail];
+res.json({ status: "success", message: "Registered successfully as " + role });
 
     } catch (err) {
         res.status(500).json({ error: err.message });
