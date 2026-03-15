@@ -5,7 +5,11 @@ const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: '*', // Sabhi devices ko allow karega
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 const API_KEY = 'NSS_Roshan_2026_SecureKey';
@@ -259,6 +263,8 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
     }
 });
 
-// Port configuration for Render
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Master API Server running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Master API Server running on port ${PORT}`);
+    console.log(`Local network par connect karne ke liye IP check karein!`);
+});
