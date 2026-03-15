@@ -112,8 +112,20 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
             .input('N', fullName).input('E', normalizedEmail).input('P', phone).input('D', dob).input('G', gender)
             .input('B', bloodGroup).input('R', role).input('GID', groupId).input('Pass', hash)
             .input('C', caste).input('Dept', department).input('Course', course)
+            .input('N', fullName)
+            .input('E', email)
+            .input('P', contact) // Tumne query mein 3rd column 'Contact' rakha hai, toh yahan phone aana chahiye
+            .input('D', dob)
+            .input('G', gender)
+            .input('B', bloodGroup)
+            .input('R', userRole)
+            .input('GID', groupID)
+            .input('Pass', password) // Password yahan hai
+            .input('C', caste)
+            .input('Dept', department)
+            .input('Course', course)
             .query(`INSERT INTO AppUsers (FullName, Email, Contact, DOB, Gender, BloodGroup, UserRole, GroupID, Password, UserStatus, Caste, Department, Course) 
-                    VALUES (@N, @E, @P, @D, @G, @B, @R, @GID, @Pass, 'Active', @C, @Dept, @Course)`);
+                    VALUES (@N, @E, @D, @G, @B, @R, @GID, @Pass, 'Active', @C, @Dept, @Course)`);
 
         delete otps[normalizedEmail];
         res.json({ status: "success", message: "Registered successfully as " + role });
