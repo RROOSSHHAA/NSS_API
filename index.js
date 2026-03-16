@@ -93,35 +93,42 @@ app.post('/api/auth/send-otp', async (req, res) => {
 // --- 5. VERIFY OTP & REGISTER ---
 app.post('/api/auth/verify-and-register', async (req, res) => {
     try {
-        const { email, userOtp } = req.body;
+        const { email, userOtp, ...fallbackData } = req.body;
         const normalizedEmail = email.trim().toLowerCase();
         const record = otps[normalizedEmail];
 
-        // DEMO BYPASS: Agar asli OTP nahi aaya toh '123456' use kar lena presentation me
-        if (userOtp === "123456") {
-             // Record check skip for demo bypass
+        // DEMO BYPASS: OTP 123456 ko hamesha allow karega
+        if (userOtp === "123456" || userOtp === 123456) {
+            console.log("Using Demo Bypass for:", normalizedEmail);
         } else if (!record || record.otp !== userOtp.toString()) {
             return res.status(400).json({ message: "Invalid or expired OTP" });
         }
 
         const pool = await poolPromise;
-        const data = record ? record.data : req.body; // Bypass safety
-        const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = data;
+        // Data priority: OTP record > Request Body (Fallback)
+        const userData = record ? record.data : fallbackData;
+        
+        const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = userData;
 
         // Fetch GroupID
-        const groupRes = await pool.request()
-            .input('BN', batch)
-            .input('YN', year)
-            .query(`SELECT g.GroupID FROM dbo.Groups g 
-                    JOIN dbo.Batches b ON g.BatchID = b.BatchID 
-                    WHERE b.BatchName = @BN AND g.YearName = @YN`);
+        let groupId = null;
+        try {
+            const groupRes = await pool.request()
+                .input('BN', batch)
+                .input('YN', year)
+                .query(`SELECT g.GroupID FROM dbo.Groups g 
+                        JOIN dbo.Batches b ON g.BatchID = b.BatchID 
+                        WHERE b.BatchName = @BN AND g.YearName = @YN`);
 
-        if (groupRes.recordset.length === 0) return res.status(400).json({ message: "Selected Batch/Year not found." });
+            if (groupRes.recordset.length > 0) {
+                groupId = groupRes.recordset[0].GroupID;
+            }
+        } catch (dbErr) {
+            console.log("Group selection failed, proceeding with null GroupID");
+        }
 
-        const groupId = groupRes.recordset[0].GroupID;
         let role = 'Member';
-
-        if (leaderCode && leaderCode.trim() !== "") {
+        if (leaderCode && leaderCode.trim() !== "" && groupId) {
             const lCheck = await pool.request()
                 .input('Code', leaderCode)
                 .input('GID', groupId)
@@ -157,7 +164,8 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         res.json({ status: "success", message: "Registered successfully as " + role });
 
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error("Registration Error:", err.message);
+        res.status(500).json({ error: "DB Error: " + err.message });
     }
 });
 
@@ -171,8 +179,7 @@ app.get('/api/leader/students', verifyToken, async (req, res) => {
             .query(`
                 SELECT S.UserID, S.FullName, S.Email, S.Course, S.Department, S.Year 
                 FROM dbo.AppUsers S
-                JOIN dbo.AppUsers L ON S.Course = L.Course 
-                    AND S.GroupID = L.GroupID
+                JOIN dbo.AppUsers L ON S.GroupID = L.GroupID
                 WHERE L.UserID = @leaderId 
                   AND S.UserRole = 'Member'
                   AND S.UserID != @leaderId;
