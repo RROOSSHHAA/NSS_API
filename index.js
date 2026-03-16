@@ -3,7 +3,7 @@ const cors = require('cors');
 const sql = require('mssql');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken'); // Ye add kiya kyunki niche verifyToken me chahiye
+const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(cors({
@@ -14,7 +14,7 @@ app.use(cors({
 app.use(express.json());
 
 const API_KEY = 'NSS_Roshan_2026_SecureKey';
-const JWT_SECRET = 'NSS_Secret_Key_9988'; // Token verify karne ke liye zaroori hai
+const JWT_SECRET = 'NSS_Secret_Key_9988';
 const otps = {}; 
 
 // --- 1. DATABASE CONFIGURATION ---
@@ -36,7 +36,7 @@ const poolPromise = new sql.ConnectionPool(dbConfig).connect()
     })
     .catch(err => console.log('❌ DB Connection Failed:', err.message));
 
-// --- 2. AUTH MIDDLEWARE (Jo tumhare code me missing tha) ---
+// --- 2. AUTH MIDDLEWARE ---
 function verifyToken(req, res, next) {
     const token = req.headers['authorization'];
     if (!token) return res.status(403).send("Token required");
@@ -65,19 +65,19 @@ app.get('/', (req, res) => res.send('NSS Master API is LIVE!'));
 app.post('/api/auth/send-otp', async (req, res) => {
     if (req.headers['x-api-key'] !== API_KEY) return res.status(401).send("Unauthorized");
 
-    const { email, ...registrationData } = req.body;
-    if (!record || (record.otp !== userOtp.toString() && userOtp !== "123456"));
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-    otps[normalizedEmail] = {
-        otp,
-        data: registrationData,
-        expires: Date.now() + 600000
-    };
-
     try {
+        const { email, ...registrationData } = req.body;
+        if (!email) return res.status(400).send("Email is required");
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        otps[normalizedEmail] = {
+            otp,
+            data: registrationData,
+            expires: Date.now() + 600000
+        };
+
         await transporter.sendMail({
             from: '"NSS Ratnam" <nesratnam.nssmanagementsystem@gmail.com>',
             to: normalizedEmail,
@@ -92,17 +92,21 @@ app.post('/api/auth/send-otp', async (req, res) => {
 
 // --- 5. VERIFY OTP & REGISTER ---
 app.post('/api/auth/verify-and-register', async (req, res) => {
-    const { email, userOtp } = req.body;
-    const normalizedEmail = email.trim().toLowerCase();
-    const record = otps[normalizedEmail];
-
-    if (!record || record.otp !== userOtp.toString()) {
-        return res.status(400).json({ message: "Invalid or expired OTP" });
-    }
-
     try {
+        const { email, userOtp } = req.body;
+        const normalizedEmail = email.trim().toLowerCase();
+        const record = otps[normalizedEmail];
+
+        // DEMO BYPASS: Agar asli OTP nahi aaya toh '123456' use kar lena presentation me
+        if (userOtp === "123456") {
+             // Record check skip for demo bypass
+        } else if (!record || record.otp !== userOtp.toString()) {
+            return res.status(400).json({ message: "Invalid or expired OTP" });
+        }
+
         const pool = await poolPromise;
-        const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = record.data;
+        const data = record ? record.data : req.body; // Bypass safety
+        const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = data;
 
         // Fetch GroupID
         const groupRes = await pool.request()
@@ -133,7 +137,6 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
 
         const hash = await bcrypt.hash(password, 10);
 
-        // --- FIXED INSERT QUERY ---
         await pool.request()
             .input('N', fullName)
             .input('E', normalizedEmail)
@@ -166,11 +169,10 @@ app.get('/api/leader/students', verifyToken, async (req, res) => {
         const result = await pool.request()
             .input('leaderId', sql.Int, leaderId)
             .query(`
-                SELECT S.UserID, S.FullName, S.Email, S.Course, S.Batch, S.Year 
+                SELECT S.UserID, S.FullName, S.Email, S.Course, S.Department, S.Year 
                 FROM dbo.AppUsers S
                 JOIN dbo.AppUsers L ON S.Course = L.Course 
-                    AND S.Batch = L.Batch 
-                    AND S.Year = L.Year
+                    AND S.GroupID = L.GroupID
                 WHERE L.UserID = @leaderId 
                   AND S.UserRole = 'Member'
                   AND S.UserID != @leaderId;
@@ -240,7 +242,7 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
                 IF EXISTS (
                     SELECT 1 FROM dbo.AppUsers L, dbo.AppUsers S
                     WHERE L.UserID = @leaderId AND S.UserID = @studentId
-                      AND L.Course = S.Course AND L.Batch = S.Batch AND L.Year = S.Year
+                      AND L.GroupID = S.GroupID
                       AND L.UserRole = 'Leader'
                 )
                 BEGIN
