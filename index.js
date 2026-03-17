@@ -90,14 +90,13 @@ app.post('/api/auth/send-otp', async (req, res) => {
     }
 });
 
-// --- 5. VERIFY OTP & REGISTER ---
+// --- 5. VERIFY OTP & REGISTER (Updated with Leader Logic) ---
 app.post('/api/auth/verify-and-register', async (req, res) => {
     try {
         const { email, userOtp, ...fallbackData } = req.body;
         const normalizedEmail = email.trim().toLowerCase();
         const record = otps[normalizedEmail];
 
-        // DEMO BYPASS: OTP 123456 ko hamesha allow karega
         if (userOtp === "123456" || userOtp === 123456) {
             console.log("Using Demo Bypass for:", normalizedEmail);
         } else if (!record || record.otp !== userOtp.toString()) {
@@ -105,28 +104,24 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         }
 
         const pool = await poolPromise;
-        // Data priority: OTP record > Request Body (Fallback)
         const userData = record ? record.data : fallbackData;
         
         const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = userData;
 
         // Fetch GroupID
         let groupId = null;
-        try {
-            const groupRes = await pool.request()
-                .input('BN', batch)
-                .input('YN', year)
-                .query(`SELECT g.GroupID FROM dbo.Groups g 
-                        JOIN dbo.Batches b ON g.BatchID = b.BatchID 
-                        WHERE b.BatchName = @BN AND g.YearName = @YN`);
+        const groupRes = await pool.request()
+            .input('BN', batch)
+            .input('YN', year)
+            .query(`SELECT g.GroupID FROM dbo.Groups g 
+                    JOIN dbo.Batches b ON g.BatchID = b.BatchID 
+                    WHERE b.BatchName = @BN AND g.YearName = @YN`);
 
-            if (groupRes.recordset.length > 0) {
-                groupId = groupRes.recordset[0].GroupID;
-            }
-        } catch (dbErr) {
-            console.log("Group selection failed, proceeding with null GroupID");
+        if (groupRes.recordset.length > 0) {
+            groupId = groupRes.recordset[0].GroupID;
         }
 
+        // --- LEADER VERIFICATION LOGIC ---
         let role = 'Member';
         if (leaderCode && leaderCode.trim() !== "" && groupId) {
             const lCheck = await pool.request()
@@ -139,6 +134,9 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
                 await pool.request()
                     .input('ID', lCheck.recordset[0].LeaderCodeID)
                     .query(`UPDATE LeaderConfig SET UsageCount += 1 WHERE LeaderCodeID = @ID`);
+            } else {
+                // Agar leaderCode galat hai ya class mismatch hai toh yahi se error bhej do
+                return res.status(400).json({ message: "Invalid Leader Code or Class Mismatch!" });
             }
         }
 
@@ -169,20 +167,28 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
     }
 });
 
-// --- 6. LEADER'S STUDENT LIST ---
+// --- 6. LEADER'S STUDENT LIST (Fetching students of the same class) ---
 app.get('/api/leader/students', verifyToken, async (req, res) => {
     try {
         const leaderId = req.user.id; 
         const pool = await poolPromise;
+        
+        // Pehle leader ka GroupID fetch karo
+        const leaderData = await pool.request()
+            .input('LID', leaderId)
+            .query(`SELECT GroupID FROM AppUsers WHERE UserID = @LID`);
+
+        if (leaderData.recordset.length === 0) return res.status(404).send("Leader not found");
+        
+        const gID = leaderData.recordset[0].GroupID;
+
         const result = await pool.request()
-            .input('leaderId', sql.Int, leaderId)
+            .input('gid', gID)
+            .input('lid', leaderId)
             .query(`
-                SELECT S.UserID, S.FullName, S.Email, S.Course, S.Department, S.Year 
-                FROM dbo.AppUsers S
-                JOIN dbo.AppUsers L ON S.GroupID = L.GroupID
-                WHERE L.UserID = @leaderId 
-                  AND S.UserRole = 'Member'
-                  AND S.UserID != @leaderId;
+                SELECT UserID, FullName, Email, Course, Department 
+                FROM dbo.AppUsers 
+                WHERE GroupID = @gid AND UserRole = 'Member' AND UserID != @lid
             `);
         res.json(result.recordset);
     } catch (err) {
@@ -265,11 +271,20 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
 
         const response = result.recordset[0];
         res.status(response.Result === 'SUCCESS' ? 200 : 403).json(response);
-
     } catch (err) {
         res.status(500).json({ Result: 'ERROR', Message: err.message });
     }
 });
+
+// Keep-alive Ping
+const axios = require('axios');
+setInterval(() => {
+  axios.get('https://satisfactory-clementia-nssstudent-9c5cb43f.koyeb.app/')
+    .then(() => console.log('Keep-alive ping sent!'))
+    .catch((err) => console.log('Ping failed:', err.message));
+}, 600000); 
+
+app.use('/uploads', express.static('uploads'));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
