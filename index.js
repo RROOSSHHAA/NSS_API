@@ -4,7 +4,7 @@ const sql = require('mssql');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const axios = require('axios'); // Added Axios for any external calls
+const axios = require('axios');
 
 const app = express();
 
@@ -28,7 +28,8 @@ const dbConfig = {
     database: 'NSS_Ratnam_DB',
     options: {
         encrypt: true,
-        trustServerCertificate: true
+        trustServerCertificate: true,
+        connectTimeout: 30000 
     }
 };
 
@@ -93,7 +94,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
     }
 });
 
-// --- 5. VERIFY OTP & REGISTER (Leader Logic Included) ---
+// --- 5. VERIFY OTP & REGISTER (Updated with Leader Logic) ---
 app.post('/api/auth/verify-and-register', async (req, res) => {
     try {
         const { email, userOtp, ...fallbackData } = req.body;
@@ -112,7 +113,7 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         
         const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = userData;
 
-        // Fetch GroupID
+        // Fetch GroupID logic
         let groupId = null;
         const groupRes = await pool.request()
             .input('BN', batch)
@@ -125,7 +126,7 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
             groupId = groupRes.recordset[0].GroupID;
         }
 
-        // Leader Role Logic
+        // --- LEADER VERIFICATION LOGIC ---
         let role = 'Member';
         if (leaderCode && leaderCode.trim() !== "" && groupId) {
             const lCheck = await pool.request()
@@ -165,16 +166,44 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         res.json({ status: "success", message: "Registered successfully as " + role });
 
     } catch (err) {
-        res.status(500).json({ error: "Registration failed: " + err.message });
+        console.error("Registration Error:", err.message);
+        res.status(500).json({ error: "DB Error: " + err.message });
     }
 });
 
-// --- 6. UNIVERSAL LOGIN ---
+// --- 6. LEADER'S STUDENT LIST (Fetching students of the same class) ---
+app.get('/api/leader/students', verifyToken, async (req, res) => {
+    try {
+        const leaderId = req.user.id; 
+        const pool = await poolPromise;
+        
+        const leaderData = await pool.request()
+            .input('LID', leaderId)
+            .query(`SELECT GroupID FROM AppUsers WHERE UserID = @LID`);
+
+        if (leaderData.recordset.length === 0) return res.status(404).send("Leader not found");
+        
+        const gID = leaderData.recordset[0].GroupID;
+
+        const result = await pool.request()
+            .input('gid', gID)
+            .input('lid', leaderId)
+            .query(`
+                SELECT UserID, FullName, Email, Course, Department 
+                FROM dbo.AppUsers 
+                WHERE GroupID = @gid AND UserRole = 'Member' AND UserID != @lid
+            `);
+        res.json(result.recordset);
+    } catch (err) {
+        res.status(500).send("Server Error: " + err.message);
+    }
+});
+
+// --- 7. UNIVERSAL LOGIN ---
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Officer Admin Bypass
     if (normalizedEmail === 'sharwarinarvekar812@gmail.com' && password === 'Shar@123') {
         const token = jwt.sign({ id: 0, role: 'Officer' }, JWT_SECRET);
         return res.json({ status: "success", token, user: { id: 0, name: "Sharwari Narvekar", role: "Officer" } });
@@ -214,31 +243,6 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// --- 7. FETCH STUDENTS FOR LEADER ---
-app.get('/api/leader/students', verifyToken, async (req, res) => {
-    try {
-        const leaderId = req.user.id; 
-        const pool = await poolPromise;
-        
-        const leaderData = await pool.request()
-            .input('LID', leaderId)
-            .query(`SELECT GroupID FROM AppUsers WHERE UserID = @LID`);
-
-        if (leaderData.recordset.length === 0) return res.status(404).send("Leader not found");
-        const gID = leaderData.recordset[0].GroupID;
-
-        const result = await pool.request()
-            .input('gid', gID)
-            .input('lid', leaderId)
-            .query(`SELECT UserID, FullName, Email, Course, Department FROM dbo.AppUsers 
-                    WHERE GroupID = @gid AND UserRole = 'Member' AND UserID != @lid`);
-        
-        res.json(result.recordset);
-    } catch (err) {
-        res.status(500).send("Server Error: " + err.message);
-    }
-});
-
 // --- 8. ATTENDANCE MARKING ---
 app.post('/api/attendance/mark', verifyToken, async (req, res) => {
     try {
@@ -251,8 +255,12 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
             .input('studentId', sql.Int, studentId)
             .input('status', sql.NVarChar, status)
             .query(`
-                IF EXISTS (SELECT 1 FROM dbo.AppUsers L, dbo.AppUsers S 
-                           WHERE L.UserID = @leaderId AND S.UserID = @studentId AND L.GroupID = S.GroupID AND L.UserRole = 'Leader')
+                IF EXISTS (
+                    SELECT 1 FROM dbo.AppUsers L, dbo.AppUsers S
+                    WHERE L.UserID = @leaderId AND S.UserID = @studentId
+                      AND L.GroupID = S.GroupID
+                      AND L.UserRole = 'Leader'
+                )
                 BEGIN
                     INSERT INTO dbo.Attendance (StudentID, Status, MarkedBy, AttendanceDate)
                     VALUES (@studentId, @status, @leaderId, CAST(GETDATE() AS DATE));
@@ -260,7 +268,7 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
                 END
                 ELSE
                 BEGIN
-                    SELECT 'ERROR' AS Result, 'Unauthorized: Class mismatch or Not a Leader!' AS Message;
+                    SELECT 'ERROR' AS Result, 'Unauthorized: Class mismatch or you are not a Leader!' AS Message;
                 END
             `);
 
@@ -271,10 +279,10 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
     }
 });
 
-// --- 9. PRODUCTION SETUP ---
+// --- 9. PRODUCTION SETUP & EXPOSE ---
 app.use('/uploads', express.static('uploads'));
 
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 10000; 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
