@@ -4,16 +4,17 @@ FROM node:18
 # Create app directory
 WORKDIR /usr/src/app
 
-# Copy package filesCOPY package*.json ./
+# NssApi folder ke andar se files copy karein
+COPY NssApi/package*.json ./
 
 # Install dependencies
 RUN npm install
 
-# Copy all source code
-COPY . .
+# Saara code NssApi folder se copy karein
+COPY NssApi/ .
 
-# Expose the port (Koyeb usually uses 10000 or 8080)
+# Expose the port
 EXPOSE 10000
 
-# Start the application using index.js
+# Start the application
 CMD [ "node", "index.js" ]
