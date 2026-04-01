@@ -28,7 +28,7 @@ const dbConfig = {
     options: {
         encrypt: true,
         trustServerCertificate: true,
-        connectTimeout: 30000 // Added 30s timeout here for stability
+        connectTimeout: 30000 
     }
 };
 
@@ -53,7 +53,7 @@ function verifyToken(req, res, next) {
     }
 }
 
-// --- 3. EMAIL SETUP (Nodemailer) ---
+// --- 3. EMAIL SETUP ---
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -62,7 +62,10 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-app.get('/', (req, res) => res.send('NSS Master API is LIVE on New Server!'));
+// Root Route updated with new Cloud Info
+app.get('/', (req, res) => {
+    res.send('🚀 NSS Ratnam API is LIVE on Imperial Cloud Server!');
+});
 
 // --- 4. SEND OTP ROUTE ---
 app.post('/api/auth/send-otp', async (req, res) => {
@@ -78,7 +81,7 @@ app.post('/api/auth/send-otp', async (req, res) => {
         otps[normalizedEmail] = {
             otp,
             data: registrationData,
-            expires: Date.now() + 600000 // 10 mins
+            expires: Date.now() + 600000 
         };
 
         await transporter.sendMail({
@@ -93,14 +96,13 @@ app.post('/api/auth/send-otp', async (req, res) => {
     }
 });
 
-// --- 5. VERIFY OTP & REGISTER (Leader Logic Included) ---
+// --- 5. VERIFY OTP & REGISTER ---
 app.post('/api/auth/verify-and-register', async (req, res) => {
     try {
         const { email, userOtp, ...fallbackData } = req.body;
         const normalizedEmail = email.trim().toLowerCase();
         const record = otps[normalizedEmail];
 
-        // DEMO BYPASS for Presentation
         if (userOtp === "123456" || userOtp === 123456) {
             console.log("Using Demo Bypass for:", normalizedEmail);
         } else if (!record || record.otp !== userOtp.toString()) {
@@ -112,7 +114,6 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         
         const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = userData;
 
-        // Fetch GroupID
         let groupId = null;
         const groupRes = await pool.request()
             .input('BN', batch)
@@ -125,7 +126,6 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
             groupId = groupRes.recordset[0].GroupID;
         }
 
-        // Leader Role Logic
         let role = 'Member';
         if (leaderCode && leaderCode.trim() !== "" && groupId) {
             const lCheck = await pool.request()
@@ -174,7 +174,6 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Officer Admin Bypass
     if (normalizedEmail === 'sharwarinarvekar812@gmail.com' && password === 'Shar@123') {
         const token = jwt.sign({ id: 0, role: 'Officer' }, JWT_SECRET);
         return res.json({ status: "success", token, user: { id: 0, name: "Sharwari Narvekar", role: "Officer" } });
@@ -271,10 +270,9 @@ app.post('/api/attendance/mark', verifyToken, async (req, res) => {
     }
 });
 
-// --- 9. PRODUCTION SETUP ---
 app.use('/uploads', express.static('uploads'));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🚀 Imperial Server is running on port ${PORT}`);
 });
