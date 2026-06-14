@@ -1,14 +1,19 @@
-const { Sequelize } = require('sequelize');
+const { Pool } = require('pg');
+require('dotenv').config();
 
-const sequelize = new Sequelize('postgres://admin:74Hfuryqe2xu6UN@nssmemberdb.c1u4mw8s0xrb.us-east-2.rds.amazonaws.com:5432/NSS_Ratnam_DB', {
-    dialect: 'postgres',
-    logging: false,
-    dialectOptions: {
-        ssl: {
-            require: true,
-            rejectUnauthorized: false
-        }
-    }
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
-module.exports = sequelize;
+pool.on('connect', () => {
+  console.log('✅ Connected to Supabase (PostgreSQL) Successfully!');
+});
+
+pool.on('error', (err) => {
+  console.error('❌ Supabase Connection Failed:', err.message);
+});
+
+module.exports = pool;

@@ -24,8 +24,9 @@
     "cors": "^2.8.6",
     "dotenv": "^16.0.0",
     "express": "^4.22.1",
+    "googleapis": "^140.0.0",
     "jsonwebtoken": "^9.0.3",
-    "mssql": "^10.0.4",
-    "nodemailer": "^6.10.1"
+    "nodemailer": "^6.10.1",
+    "pg": "^8.11.3"
   }
 }

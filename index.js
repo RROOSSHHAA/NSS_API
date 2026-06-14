@@ -1,9 +1,10 @@
 const express = require('express');
 const cors = require('cors');
-const sql = require('mssql');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const pool = require('./db');
+const { appendToSheet } = require('./sheets');
 
 const app = express();
 
@@ -16,28 +17,8 @@ app.use(cors({
 app.use(express.json());
 
 const API_KEY = 'NSS_Roshan_2026_SecureKey';
-const JWT_SECRET = 'NSS_Secret_Key_9988';
+const JWT_SECRET = process.env.JWT_SECRET || 'NSS_Secret_Key_9988';
 const otps = {}; 
-
-// --- 1. DATABASE CONFIGURATION (AWS RDS) ---
-const dbConfig = {
-    user: 'admin',
-    password: '74Hfuryqe2xu6UN',
-    server: 'nssmemberdb.c1u4mw8s0xrb.us-east-2.rds.amazonaws.com',
-    database: 'NSS_Ratnam_DB',
-    options: {
-        encrypt: true,
-        trustServerCertificate: true,
-        connectTimeout: 30000 
-    }
-};
-
-const poolPromise = new sql.ConnectionPool(dbConfig).connect()
-    .then(pool => {
-        console.log('✅ Connected to RDS (MSSQL) Successfully!');
-        return pool;
-    })
-    .catch(err => console.log('❌ DB Connection Failed:', err.message));
 
 // --- 2. AUTH MIDDLEWARE ---
 function verifyToken(req, res, next) {
@@ -58,13 +39,13 @@ const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
         user: 'nesratnam.nssmanagementsystem@gmail.com',
-        pass: 'icvv uzon orqu sfag'
+        pass: 'icvv uzon orqu sfag' // Keeping original app password
     }
 });
 
-// Root Route updated with new Cloud Info
+// Root Route
 app.get('/', (req, res) => {
-    res.send('🚀 NSS Ratnam API is LIVE on Imperial Cloud Server!');
+    res.send('🚀 NSS Ratnam API is LIVE on Supabase PostgreSQL!');
 });
 
 // --- 4. SEND OTP ROUTE ---
@@ -109,62 +90,75 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
             return res.status(400).json({ message: "Invalid or expired OTP" });
         }
 
-        const pool = await poolPromise;
         const userData = record ? record.data : fallbackData;
-        
-        const { fullName, phone, dob, gender, bloodGroup, batch, year, leaderCode, password, caste, department, course } = userData;
+        const { fullName, phone, nssId, course, year, leaderCode, password } = userData;
 
-        let groupId = null;
-        const groupRes = await pool.request()
-            .input('BN', batch)
-            .input('YN', year)
-            .query(`SELECT g.GroupID FROM dbo.Groups g 
-                    JOIN dbo.Batches b ON g.BatchID = b.BatchID 
-                    WHERE b.BatchName = @BN AND g.YearName = @YN`);
+        // 1. Check Course & Year (Direct Mapping)
+        const classRes = await pool.query('SELECT id FROM classes WHERE short_name = $1', [course]);
+        if (classRes.rows.length === 0) return res.status(400).json({ message: "Invalid Course" });
+        const classId = classRes.rows[0].id;
 
-        if (groupRes.recordset.length > 0) {
-            groupId = groupRes.recordset[0].GroupID;
-        }
-
-        let role = 'Member';
-        if (leaderCode && leaderCode.trim() !== "" && groupId) {
-            const lCheck = await pool.request()
-                .input('Code', leaderCode)
-                .input('GID', groupId)
-                .query(`SELECT * FROM LeaderConfig WHERE ClassLeaderKey = @Code AND GroupID = @GID AND UsageCount < MaxUsage`);
-            
-            if (lCheck.recordset.length > 0) {
-                role = 'Leader';
-                await pool.request()
-                    .input('ID', lCheck.recordset[0].LeaderCodeID)
-                    .query(`UPDATE LeaderConfig SET UsageCount += 1 WHERE LeaderCodeID = @ID`);
-            } else {
-                return res.status(400).json({ message: "Invalid Leader Code or Class Mismatch!" });
-            }
-        }
+        const yearRes = await pool.query('SELECT id FROM academic_years WHERE year_name = $1', [year]);
+        if (yearRes.rows.length === 0) return res.status(400).json({ message: "Invalid Academic Year" });
+        const yearId = yearRes.rows[0].id;
 
         const hash = await bcrypt.hash(password, 10);
+        let role = 'volunteer';
+        let leader_id_db = null;
 
-        await pool.request()
-            .input('N', fullName)
-            .input('E', normalizedEmail)
-            .input('P', phone)
-            .input('D', dob)
-            .input('G', gender)
-            .input('B', bloodGroup)
-            .input('R', role)
-            .input('GID', groupId)
-            .input('Pass', hash)
-            .input('C', caste)
-            .input('Dept', department)
-            .input('Course', course)
-            .query(`INSERT INTO AppUsers (FullName, Email, Phone, DOB, Gender, BloodGroup, UserRole, GroupID, Password, Caste, Department, Course) 
-                    VALUES (@N, @E, @P, @D, @G, @B, @R, @GID, @Pass, @C, @Dept, @Course)`);
+        // 2. Validate Leader Code if provided
+        if (leaderCode && leaderCode.trim() !== "") {
+            const codeRes = await pool.query(
+                'SELECT * FROM leader_registration_codes WHERE code = $1 AND is_used = false AND class_id = $2 AND academic_year_id = $3',
+                [leaderCode.trim(), classId, yearId]
+            );
+            
+            if (codeRes.rows.length === 0) {
+                return res.status(400).json({ message: "Invalid Leader Code or Class Mismatch!" });
+            }
+            role = 'leader';
+            leader_id_db = leaderCode.trim();
+        }
+
+        // 3. Insert User into PostgreSQL
+        // We use a generated NSS ID if none is provided.
+        const generatedNssId = nssId || ('NSS' + Math.floor(Math.random() * 1000000));
+        
+        const insertRes = await pool.query(
+            `INSERT INTO users (nss_id, name, email, phone, password_hash, role, class_id, academic_year_id, leader_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+            [generatedNssId, fullName, normalizedEmail, phone, hash, role, classId, yearId, leader_id_db]
+        );
+        
+        const newUserId = insertRes.rows[0].id;
+
+        // 4. If Leader, trigger the DB Logic
+        if (role === 'leader') {
+            await pool.query(
+                `UPDATE leader_registration_codes SET assigned_to_user_id = $1 WHERE code = $2`,
+                [newUserId, leaderCode.trim()]
+            );
+        }
 
         delete otps[normalizedEmail];
+
+        // 5. --- GOOGLE SHEETS SYNC ---
+        await appendToSheet([
+            new Date().toISOString(),
+            generatedNssId,
+            fullName,
+            normalizedEmail,
+            phone,
+            course,
+            year,
+            role,
+            leaderCode || 'NA'
+        ]);
+
         res.json({ status: "success", message: "Registered successfully as " + role });
 
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: "Registration failed: " + err.message });
     }
 });
@@ -180,32 +174,34 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     try {
-        const pool = await poolPromise;
-        const result = await pool.request()
-            .input('E', normalizedEmail)
-            .query(`SELECT u.*, g.YearName, b.BatchName FROM AppUsers u 
-                    LEFT JOIN Groups g ON u.GroupID = g.GroupID 
-                    LEFT JOIN Batches b ON g.BatchID = b.BatchID WHERE u.Email = @E`);
+        const result = await pool.query(
+            `SELECT u.*, c.short_name as course_name, y.year_name as year_name 
+             FROM users u 
+             LEFT JOIN classes c ON u.class_id = c.id 
+             LEFT JOIN academic_years y ON u.academic_year_id = y.id 
+             WHERE u.email = $1 AND u.is_active = true`,
+            [normalizedEmail]
+        );
 
-        if (result.recordset.length === 0) return res.status(404).json({ message: "User not found" });
+        if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
         
-        const user = result.recordset[0];
-        const isMatch = await bcrypt.compare(password, user.Password);
+        const user = result.rows[0];
+        const isMatch = await bcrypt.compare(password, user.password_hash);
         
         if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
 
-        const token = jwt.sign({ id: user.UserID, role: user.UserRole }, JWT_SECRET);
+        const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET);
 
         res.json({
             status: "success",
             token,
             user: {
-                id: user.UserID,
-                name: user.FullName,
-                role: user.UserRole,
-                groupId: user.GroupID,
-                batch: user.BatchName,
-                year: user.YearName
+                id: user.id,
+                nss_id: user.nss_id,
+                name: user.name,
+                role: user.role,
+                course: user.course_name,
+                year: user.year_name
             }
         });
     } catch (err) {
@@ -217,22 +213,22 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/leader/students', verifyToken, async (req, res) => {
     try {
         const leaderId = req.user.id; 
-        const pool = await poolPromise;
         
-        const leaderData = await pool.request()
-            .input('LID', leaderId)
-            .query(`SELECT GroupID FROM AppUsers WHERE UserID = @LID`);
+        const allocRes = await pool.query(`SELECT class_id, academic_year_id FROM leader_allocations WHERE leader_uuid = $1 AND is_active = true`, [leaderId]);
 
-        if (leaderData.recordset.length === 0) return res.status(404).send("Leader not found");
-        const gID = leaderData.recordset[0].GroupID;
+        if (allocRes.rows.length === 0) return res.status(404).send("Leader allocation not found");
+        const { class_id, academic_year_id } = allocRes.rows[0];
 
-        const result = await pool.request()
-            .input('gid', gID)
-            .input('lid', leaderId)
-            .query(`SELECT UserID, FullName, Email, Course, Department FROM dbo.AppUsers 
-                    WHERE GroupID = @gid AND UserRole = 'Member' AND UserID != @lid`);
+        const result = await pool.query(
+            `SELECT u.id as UserID, u.name as FullName, u.email as Email, c.short_name as Course, y.year_name as Year 
+             FROM users u 
+             JOIN classes c ON u.class_id = c.id
+             JOIN academic_years y ON u.academic_year_id = y.id
+             WHERE u.class_id = $1 AND u.academic_year_id = $2 AND u.role = 'volunteer' AND u.is_active = true`,
+            [class_id, academic_year_id]
+        );
         
-        res.json(result.recordset);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).send("Server Error: " + err.message);
     }
@@ -241,32 +237,78 @@ app.get('/api/leader/students', verifyToken, async (req, res) => {
 // --- 8. ATTENDANCE MARKING ---
 app.post('/api/attendance/mark', verifyToken, async (req, res) => {
     try {
-        const { studentId, status } = req.body; 
+        const { studentId, status, eventId, hours } = req.body; 
         const leaderId = req.user.id; 
+        
+        // Check if leader manages this student's class
+        const checkAuth = await pool.query(
+            `SELECT 1 FROM leader_allocations la
+             JOIN users s ON la.class_id = s.class_id AND la.academic_year_id = s.academic_year_id
+             WHERE la.leader_uuid = $1 AND s.id = $2`,
+            [leaderId, studentId]
+        );
 
-        const pool = await poolPromise;
-        const result = await pool.request()
-            .input('leaderId', sql.Int, leaderId)
-            .input('studentId', sql.Int, studentId)
-            .input('status', sql.NVarChar, status)
-            .query(`
-                IF EXISTS (SELECT 1 FROM dbo.AppUsers L, dbo.AppUsers S 
-                           WHERE L.UserID = @leaderId AND S.UserID = @studentId AND L.GroupID = S.GroupID AND L.UserRole = 'Leader')
-                BEGIN
-                    INSERT INTO dbo.Attendance (StudentID, Status, MarkedBy, AttendanceDate)
-                    VALUES (@studentId, @status, @leaderId, CAST(GETDATE() AS DATE));
-                    SELECT 'SUCCESS' AS Result, 'Attendance marked successfully!' AS Message;
-                END
-                ELSE
-                BEGIN
-                    SELECT 'ERROR' AS Result, 'Unauthorized: Class mismatch or Not a Leader!' AS Message;
-                END
-            `);
+        if (checkAuth.rows.length === 0) {
+            return res.status(403).json({ Result: 'ERROR', Message: 'Unauthorized: Not the leader of this class!' });
+        }
 
-        const response = result.recordset[0];
-        res.status(response.Result === 'SUCCESS' ? 200 : 403).json(response);
+        // Upsert Attendance (Avoid duplicate entries per event per student)
+        await pool.query(
+            `INSERT INTO attendance (event_id, student_id, marked_by_leader_id, status, hours_awarded)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (event_id, student_id) 
+             DO UPDATE SET status = EXCLUDED.status, hours_awarded = EXCLUDED.hours_awarded, marked_at = CURRENT_TIMESTAMP`,
+            [eventId || 1, studentId, leaderId, status || 'Present', hours || 2]
+        );
+
+        res.status(200).json({ Result: 'SUCCESS', Message: 'Attendance marked successfully!' });
     } catch (err) {
+        console.error(err);
         res.status(500).json({ Result: 'ERROR', Message: err.message });
+    }
+});
+
+// --- 9. CREATE NOTIFICATION (PO ONLY) ---
+app.post('/api/notifications/create', verifyToken, async (req, res) => {
+    try {
+        const { title, message } = req.body;
+        const officerId = req.user.id; 
+        const role = req.user.role;
+
+        // Security Check: Only Officers can create announcements
+        if (role !== 'Officer') {
+            return res.status(403).json({ status: "error", message: "Only Program Officers can create notifications" });
+        }
+
+        if (!title || !message) {
+            return res.status(400).json({ status: "error", message: "Title and Message are required" });
+        }
+
+        // We use gen_random_uuid() for officer if testing with hardcoded ID '0' or similar
+        const poIdForDb = officerId === 0 ? null : officerId; // If 0, it means the bypass PO was used. We can insert null or a specific UUID.
+
+        await pool.query(
+            `INSERT INTO notifications (title, message, created_by_po_id) VALUES ($1, $2, $3)`,
+            [title, message, poIdForDb]
+        );
+
+        res.json({ status: "success", message: "Announcement published successfully!" });
+    } catch (err) {
+        res.status(500).json({ status: "error", error: err.message });
+    }
+});
+
+// --- 10. FETCH NOTIFICATIONS (ALL USERS) ---
+app.get('/api/notifications', verifyToken, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT id, title, message, created_at FROM notifications 
+             WHERE is_active = true 
+             ORDER BY created_at DESC LIMIT 50`
+        );
+        res.json({ status: "success", data: result.rows });
+    } catch (err) {
+        res.status(500).json({ status: "error", error: err.message });
     }
 });
 
