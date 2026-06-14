@@ -3,10 +3,24 @@ const path = require('path');
 require('dotenv').config();
 
 // Initialize Google Sheets API
-const auth = new google.auth.GoogleAuth({
-    keyFile: path.join(__dirname, 'credentials.json'), // We will put the service account JSON here
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
+let auth;
+if (process.env.GOOGLE_CREDENTIALS) {
+    // For Koyeb Deployment
+    const keys = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    auth = new google.auth.GoogleAuth({
+        credentials: {
+            client_email: keys.client_email,
+            private_key: keys.private_key.replace(/\\n/g, '\n'),
+        },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+} else {
+    // For Local testing
+    auth = new google.auth.GoogleAuth({
+        keyFile: path.join(__dirname, 'credentials.json'),
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+}
 
 const sheets = google.sheets({ version: 'v4', auth });
 

@@ -175,11 +175,6 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
 
-    if (normalizedEmail === 'sharwarinarvekar812@gmail.com' && password === 'Shar@123') {
-        const token = jwt.sign({ id: 0, role: 'Officer' }, JWT_SECRET);
-        return res.json({ status: "success", token, user: { id: 0, name: "Sharwari Narvekar", role: "Officer" } });
-    }
-
     try {
         const result = await pool.query(
             `SELECT u.*, c.short_name as course_name, y.year_name as year_name 
@@ -190,8 +185,30 @@ app.post('/api/auth/login', async (req, res) => {
             [normalizedEmail]
         );
 
-        if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+        if (result.rows.length === 0) {
+            // Check if user is a Program Officer
+            const poResult = await pool.query(
+                `SELECT * FROM program_officers WHERE email = $1 AND is_active = true`,
+                [normalizedEmail]
+            );
+            
+            if (poResult.rows.length === 0) {
+                return res.status(404).json({ message: "User not found" });
+            }
+            
+            const officer = poResult.rows[0];
+            const isMatch = await bcrypt.compare(password, officer.password_hash);
+            if (!isMatch) return res.status(401).json({ message: "Invalid credentials" });
+
+            const token = jwt.sign({ id: officer.id, role: 'Officer' }, JWT_SECRET);
+            return res.json({
+                status: "success",
+                token,
+                user: { id: officer.id, name: officer.name, role: 'Officer' }
+            });
+        }
         
+        // Volunteer or Leader Flow
         const user = result.rows[0];
         const isMatch = await bcrypt.compare(password, user.password_hash);
         
