@@ -115,7 +115,7 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         // 2. Validate Leader Code if provided
         if (leaderCode && leaderCode.trim() !== "") {
             const codeRes = await pool.query(
-                'SELECT * FROM leader_registration_codes WHERE code = $1 AND is_used = false AND class_id = $2 AND academic_year_id = $3',
+                'SELECT * FROM leader_registration_codes WHERE UPPER(code) = UPPER($1) AND is_used = false AND class_id = $2 AND academic_year_id = $3',
                 [leaderCode.trim(), classId, yearId]
             );
             
@@ -123,7 +123,8 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
                 return res.status(400).json({ message: "Invalid Leader Code or Class Mismatch!" });
             }
             role = 'leader';
-            leader_id_db = leaderCode.trim();
+            // Extract the actual exact code from DB for the update step
+            leader_id_db = codeRes.rows[0].code; 
         }
 
         // 3. Insert User into PostgreSQL
@@ -131,9 +132,9 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         const generatedNssId = nssId || ('NSS' + Math.floor(Math.random() * 1000000));
         
         const insertRes = await pool.query(
-            `INSERT INTO users (nss_id, name, email, phone, password_hash, role, class_id, academic_year_id, leader_id) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-            [generatedNssId, fullName, normalizedEmail, phone, hash, role, classId, yearId, leader_id_db]
+            `INSERT INTO users (nss_id, name, email, phone, password_hash, role, class_id, academic_year_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+            [generatedNssId, fullName, normalizedEmail, phone, hash, role, classId, yearId]
         );
         
         const newUserId = insertRes.rows[0].id;
