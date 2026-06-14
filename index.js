@@ -93,12 +93,18 @@ app.post('/api/auth/verify-and-register', async (req, res) => {
         const userData = record ? record.data : fallbackData;
         const { fullName, phone, nssId, course, year, leaderCode, password } = userData;
 
-        // 1. Check Course & Year (Direct Mapping)
-        const classRes = await pool.query('SELECT id FROM classes WHERE short_name = $1', [course]);
+        // 1. Check Course & Year (Robust Case-Insensitive Mapping)
+        const classRes = await pool.query(
+            'SELECT id FROM classes WHERE LOWER(short_name) = LOWER($1) OR LOWER(full_name) = LOWER($1)', 
+            [course]
+        );
         if (classRes.rows.length === 0) return res.status(400).json({ message: "Invalid Course" });
         const classId = classRes.rows[0].id;
 
-        const yearRes = await pool.query('SELECT id FROM academic_years WHERE year_name = $1', [year]);
+        const yearRes = await pool.query(
+            'SELECT id FROM academic_years WHERE LOWER(year_name) = LOWER($1)', 
+            [year]
+        );
         if (yearRes.rows.length === 0) return res.status(400).json({ message: "Invalid Academic Year" });
         const yearId = yearRes.rows[0].id;
 
